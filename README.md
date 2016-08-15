@@ -17,11 +17,9 @@ Application for modifying Habbo Hotel's AS3 flash client.
 
 ## Usages
 Generate 1024-bit RSA keys, replace revision, and override regex host check patterns.
-
 `-g "C:\Habbo.swf" --genrsa 1024 --rev "NEWPRODUCTION" --patt "(.*)" "[a-z]{3}"`
 
-
-Default RSA Keys
+## Default RSA Keys
 ```
 E:3
 
