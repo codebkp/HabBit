@@ -1,24 +1,26 @@
 # HabBit
 This application is capable of modifying  Habbo's game client to allow it to run anywhere, from anywhere, with custom RSA keys.
 
-[Latest Release(s)](https://github.com/ArachisH/HabBit/releases)  
-*This application will take a maximum of 5 seconds without compressing(+10 with compression), and updating headers(+4) to finish.*
-
 ## Requirements
 * .NET Framework 4.5
 * (Source Only)IDE with C# 6 support.
 
 ## Capabilties
 * Bypass local/remote host checks.
-* Dump Outgoing/Incoming message data(header, hash, ctor, parser).
-* Update Outgoing/Incoming header files from a previous client revision.
+* Dump Outgoing/Incoming message headers.
+* Replace client revision value in Outgoing[4000] message.
 * Public RSA key replacement, with the option to generate new 1024-bit keys.
 
 ## Commands/Arguments
-* `-compress` - Will compress the file once it has been assembled.
-* `-rsa modulus exponent` - The custom RSA public key pair to use when replacing the client's RSA keys.
-* `-dumph` - Will create a text file containing the Outgoing/Incoming message data(header, hash, ctor, parser).
-* `-updateh previous.swf outFile.* inFile.*` - Updates the Outgoing/Incoming headers files(Relative to client) of a previous client, to the current one.
+* [Required] `-g <path>` - The game client file path to modify.
+* [Optional] `-o <path>` - The output path for the re-assembled game client, and other resources.
+* [Optional] `-c <none|zlib|lzma>` - Override compression type to use after the game client has been assembled.
+
+* [Optional] `--dhead` - Dump all Outgoing/Incoming message headers.
+* [Optional] `--rev <revision>` - Overrides the revision value found in the client's Outgoing[4000] message class.
+* [Optional] `--patt <pattern1> <pattern...>` - Replaces the regex patterns found in the main Habbo class that validate where the client is being hosted from.
+* [Optional] `--genrsa <keySize>` - Creates a fresh batch of RSA keys(with private key), this flag will override the `--rsa` argument.
+* [Optional] `--rsa <exponent> <modulus>` - Overrides the client's public RSA keys with the ones provided. The provided keys should be in base-16(Hexadecimal).
 
 Default RSA Keys
 ```
@@ -28,6 +30,3 @@ N:86851dd364d5c5cece3c883171cc6ddc5760779b992482bd1e20dd296888df91b33b936a7b93f0
 
 D:59ae13e243392e89ded305764bdd9e92e4eafa67bb6dac7e1415e8c645b0950bccd26246fd0d4af37145af5fa026c0ec3a94853013eaae5ff1888360f4f9449ee023762ec195dff3f30ca0b08b8c947e3859877b5d7dced5c8715c58b53740b84e11fbc71349a27c31745fcefeeea57cff291099205e230e0c7c27e8e1c0512b
 ```
-
-## Console Interface
-![HabBit](http://i.imgur.com/C3vcnFO.png)

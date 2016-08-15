@@ -1,484 +1,284 @@
 ﻿using System;
 using System.IO;
 using System.Text;
-using System.Linq;
 using System.Reflection;
 using System.Diagnostics;
 using System.Collections.Generic;
-using System.Text.RegularExpressions;
 
-using HabBit.Habbo;
+using CommandLine;
+using CommandLine.Text;
 
 using FlashInspect;
 using FlashInspect.ActionScript;
 
-using Sulakore.Protocol.Encryption;
+using HabBit.Habbo;
+using HabBit.Utilities;
 
 namespace HabBit
 {
     public class Program
     {
-        static HGame Game { get; set; }
-        static HGame PreviousGame { get; set; }
+        private readonly HBRSAKeys _keys;
+        private readonly Stopwatch _watch;
 
-        static string Revision { get; set; }
-        static string FileDirectory { get; set; }
+        private const string DEFAULT_EXPONENT = "3";
+        private const string DEFAULT_MODULUS = "86851dd364d5c5cece3c883171cc6ddc5760779b992482bd1e20dd296888df91b33b936a7b93f06d29e8870f703a216257dec7c81de0058fea4cc5116f75e6efc4e9113513e45357dc3fd43d4efab5963ef178b78bd61e81a14c603b24c8bcce0a12230b320045498edc29282ff0603bc7b7dae8fc1b05b52b2f301a9dc783b7";
+        private const string DEFAULT_PRIVATE_EXPONENT = "59ae13e243392e89ded305764bdd9e92e4eafa67bb6dac7e1415e8c645b0950bccd26246fd0d4af37145af5fa026c0ec3a94853013eaae5ff1888360f4f9449ee023762ec195dff3f30ca0b08b8c947e3859877b5d7dced5c8715c58b53740b84e11fbc71349a27c31745fcefeeea57cff291099205e230e0c7c27e8e1c0512b";
 
-        static int Exponent { get; set; } = 3;
-        static string Modulus { get; set; } = "86851dd364d5c5cece3c883171cc6ddc5760779b992482bd1e20dd296888df91b33b936a7b93f06d29e8870f703a216257dec7c81de0058fea4cc5116f75e6efc4e9113513e45357dc3fd43d4efab5963ef178b78bd61e81a14c603b24c8bcce0a12230b320045498edc29282ff0603bc7b7dae8fc1b05b52b2f301a9dc783b7";
-        static string PrivateExponent { get; set; } = "59ae13e243392e89ded305764bdd9e92e4eafa67bb6dac7e1415e8c645b0950bccd26246fd0d4af37145af5fa026c0ec3a94853013eaae5ff1888360f4f9449ee023762ec195dff3f30ca0b08b8c947e3859877b5d7dced5c8715c58b53740b84e11fbc71349a27c31745fcefeeea57cff291099205e230e0c7c27e8e1c0512b";
+        public HGame Game { get; }
+        public HBOptions Options { get; }
 
-        static bool IsDumpingHeaders { get; set; }
-        static bool IsUpdatingHeaders { get; set; }
-        static bool IsCompressingClient { get; set; }
+        public string FileName { get; }
 
-        static Stopwatch Watch { get; } = new Stopwatch();
-        static int UniqueInMessageHashCount { get; set; }
-        static int UniqueOutMessageHashCount { get; set; }
-
-        static string OutgoingHeaders { get; set; }
-        static string OutgoingHeadersPath { get; set; }
-
-        static string IncomingHeaders { get; set; }
-        static string IncomingHeadersPath { get; set; }
-
-        static void Main(string[] args)
+        public Program(HBOptions options)
         {
-            Console.Title = $"HabBit[{GetVersion()}] ~ Processing Arguments...";
-            HandleArguments(args);
-            UpdateTitle();
+            _watch = new Stopwatch();
 
-            Watch.Restart();
-            if (Decompress(Game))
+            Options = options;
+            Game = new HGame(Options.GamePath);
+
+            if (string.IsNullOrWhiteSpace(Options.OutputPath))
             {
-                Game.Disassemble();
-                Revision = Game.GetClientRevision();
-
-                UpdateTitle();
-                Console.Title += (", Revision: " + Revision);
-
-                if (!FileDirectory.EndsWith(Revision))
-                {
-                    FileDirectory += ("\\" + Revision);
-                    Directory.CreateDirectory(FileDirectory);
-                }
-
-                string headerDump = string.Empty;
-                if (IsDumpingHeaders)
-                {
-                    WriteLine($"Generating unique hashes for Outgoing({Game.OutgoingMessages.Count})/Incoming({Game.IncomingMessages.Count}) messages...");
-                    headerDump += DumpHeaders(Game, true);
-                    headerDump += "\r\n\r\n";
-                    headerDump += DumpHeaders(Game, false);
-                    WriteLine($"Unique Message Hashes Generated: Outgoing[{UniqueOutMessageHashCount}], Incoming[{UniqueInMessageHashCount}]");
-
-                    if (IsUpdatingHeaders)
-                    {
-                        WriteLine("Replacing previous Outgoing/Incoming headers with hashes...");
-                        PreviousGame.Decompress();
-                        PreviousGame.Disassemble();
-
-                        string fileHeader = $"//Current: {Game.GetClientRevision()}\r\n//Previous: {PreviousGame.GetClientRevision()}\r\n";
-
-                        OutgoingHeaders =
-                            (fileHeader + UpdateHeaders(
-                                OutgoingHeadersPath, Game, PreviousGame, true));
-
-                        IncomingHeaders =
-                            (fileHeader + UpdateHeaders(
-                                IncomingHeadersPath, Game, PreviousGame, false));
-                    }
-                }
-
-                Game.BypassOriginCheck();
-                Game.BypassRemoteHostCheck();
-                Game.ReplaceRSAKeys(Exponent, Modulus);
-
-                WriteLine("Assembling...");
-                Game.Assemble();
-
-                byte[] reconstructed = (IsCompressingClient ?
-                    Compress(Game) : Game.ToByteArray());
-
-                Watch.Stop();
-                WriteLine($"Finished! | Completion Time: {Watch.Elapsed:s\\.ff} Seconds");
-
-                string clientPath = $"{FileDirectory}\\Habbo.swf";
-                File.WriteAllBytes(clientPath, reconstructed);
-
-                string rsaKeysPath = $"{FileDirectory}\\RSAKeys.txt";
-                File.WriteAllText(rsaKeysPath, string.Format(
-                    "Exponent(e): {0:x}\r\nModulus(n): {1}\r\nPrivate Exponent(d): {2}",
-                    Exponent, Modulus, PrivateExponent));
-
-                Console.WriteLine("Client: " + clientPath);
-                Console.WriteLine("RSA Keys: " + rsaKeysPath);
-
-                if (!string.IsNullOrWhiteSpace(headerDump))
-                {
-                    string headersPath = $"{FileDirectory}\\Headers.txt";
-                    File.WriteAllText(headersPath, headerDump);
-
-                    Console.WriteLine("Headers: " + headersPath);
-                    if (IsUpdatingHeaders)
-                    {
-                        string inPath = $"{FileDirectory}\\{Path.GetFileName(IncomingHeadersPath)}";
-                        string outPath = $"{FileDirectory}\\{Path.GetFileName(OutgoingHeadersPath)}";
-
-                        File.WriteAllText(outPath, OutgoingHeaders);
-                        Console.WriteLine("Client Outgoing Headers: " + outPath);
-
-                        File.WriteAllText(inPath, IncomingHeaders);
-                        Console.WriteLine("Client Incoming Headers: " + inPath);
-                    }
-                }
-                WriteLine();
+                Options.OutputPath =
+                    Path.GetDirectoryName(Options.GamePath);
             }
-            else WriteLine($"File decompression failed! | {Game.Compression}");
+            else Directory.CreateDirectory(Options.OutputPath);
 
-            Console.CursorVisible = true;
-            Console.ReadKey(true);
-        }
-        static void HandleArguments(string[] args)
-        {
-            if (args.Length < 1)
-                args = GetArguments();
-
-            string path = Path.GetFullPath(args[0]);
-            if (!path.EndsWith(".swf") || !File.Exists(path))
-                args = GetArguments();
-
-            Game = new HGame(path);
-            Game.LoggerCallback = LoggerCallback;
-            FileDirectory = Path.GetDirectoryName(path);
-            for (int i = 1; i < args.Length; i++)
+            if (Options.Compression == null ||
+                !Enum.IsDefined(typeof(CompressionType), Options.Compression))
             {
-                string argument = args[i];
-                switch (argument.ToLower())
-                {
-                    case "-updateh":
-                    {
-                        IsDumpingHeaders = true;
-                        IsUpdatingHeaders = true;
-                        PreviousGame = new HGame(args[++i]);
-                        OutgoingHeadersPath = args[++i];
-                        IncomingHeadersPath = args[++i];
-                        break;
-                    }
-                    case "-rsa":
-                    {
-                        Exponent = Convert.ToInt32(args[++i], 16);
-                        Modulus = args[++i];
-                        break;
-                    }
-                    case "-compress":
-                    {
-                        IsCompressingClient = true;
-                        break;
-                    }
-                    case "-dumph":
-                    {
-                        IsDumpingHeaders = true;
-                        break;
-                    }
-                }
+                Options.Compression = Game.Compression;
             }
-        }
 
-        static string GetFile()
-        {
-            do
+            if (Options.RSAKeySize != null)
             {
-                Console.Clear();
-                Console.Write("Habbo Client Location: ");
-
-                string path = Console.ReadLine();
-                if (string.IsNullOrEmpty(path)) continue;
-
-                if (path.StartsWith("\"") && path.EndsWith("\""))
-                    path = path.Substring(1, path.Length - 2);
-
-                path = Path.GetFullPath(path);
-                if (!File.Exists(path)) continue;
-
-                if (path.EndsWith(".swf"))
-                {
-                    WriteLine();
-                    return path;
-                }
+                Console.Write($"Generating {Options.RSAKeySize}-bit RSA Keys...");
+                _keys = new HBRSAKeys((int)Options.RSAKeySize);
+                WriteLineSplit();
             }
-            while (true);
-        }
-        static Version GetVersion()
-        {
-            return Assembly.GetExecutingAssembly().GetName().Version;
-        }
-        static string[] GetArguments()
-        {
-            var argBuilder = new StringBuilder();
-            argBuilder.AppendLine(GetFile());
-            if (Ask($"Would you like to use custom RSA keys?"))
+            else if (Options.RSAKeys?.Length >= 2)
             {
-                argBuilder.AppendLine("-rsa");
-                if (Ask("Would you like to generate new RSA keys?"))
+                string e = Options.RSAKeys[0];
+                string n = Options.RSAKeys[1];
+                _keys = new HBRSAKeys(e, n);
+            }
+            else
+            {
+                _keys = new HBRSAKeys(DEFAULT_EXPONENT,
+                    DEFAULT_MODULUS, DEFAULT_PRIVATE_EXPONENT);
+            }
+
+            FileName = Path.GetFileName(Game.Location);
+            UpdateTitle(Game);
+        }
+        public static void Main(string[] args)
+        {
+            Console.CursorVisible = false;
+            try
+            {
+                var options = new HBOptions();
+                bool parsed = Parser.Default.ParseArguments(args, options);
+                if (parsed)
                 {
-                    var exchange = HKeyExchange.Create(1024);
-
-                    string e = exchange.Exponent.ToString("x");
-                    Console.WriteLine("Exponent(e): " + e);
-                    argBuilder.AppendLine(e);
-
-                    string n = exchange.Modulus.ToString("x");
-                    Console.WriteLine("Modulus(n): " + n);
-                    argBuilder.AppendLine(n);
-
-                    PrivateExponent = exchange.PrivateExponent.ToString("x");
-                    Console.WriteLine("Private Exponent(d): " + PrivateExponent);
+                    new Program(options).Run();
                 }
                 else
                 {
-                    PrivateExponent = "<Unknown>";
-
-                    Console.Write("Custom Exponent(e): ");
-                    argBuilder.AppendLine(Console.ReadLine());
-
-                    Console.Write("Custom Modulus(n): ");
-                    argBuilder.AppendLine(Console.ReadLine());
-                }
-                Console.WriteLine("---------------");
-            }
-
-            if (Ask("Would you like to enable compression?"))
-                argBuilder.AppendLine("-compress");
-
-            if (Ask("Would you like to update your Outgoing/Incoming header files?"))
-            {
-                argBuilder.AppendLine("-updateh");
-                Console.CursorVisible = true;
-
-                Console.Write("Previous Client: ");
-                argBuilder.AppendLine(Console.ReadLine());
-
-                Console.Write("Outgoing Headers File(Relative to client): ");
-                argBuilder.AppendLine(Console.ReadLine());
-
-                Console.Write("Incoming Headers File(Relative to client): ");
-                argBuilder.AppendLine(Console.ReadLine());
-
-                Console.CursorVisible = false;
-                Console.WriteLine("---------------");
-            }
-            else if (Ask("Would you like to dump header/message information?"))
-                argBuilder.AppendLine("-dumph");
-
-            Console.Clear();
-            return argBuilder.ToString().Split(
-                new string[] { "\r\n" },
-                StringSplitOptions.RemoveEmptyEntries);
-        }
-
-        static void UpdateTitle()
-        {
-            Console.Title =
-                $"HabBit[{GetVersion()}] ~ Tags: {Game.Tags.Count:n0}, ABCFiles: {Game.ABCFiles.Count:n0}, Compression: {Game.Compression}";
-        }
-        static bool Ask(string question)
-        {
-            try
-            {
-                Console.CursorVisible = true;
-                Console.Write(question + " (Y/N): ");
-                while (true)
-                {
-                    ConsoleKey key = Console.ReadKey(true).Key;
-                    bool isYes = (key == ConsoleKey.Y);
-                    if (isYes || key == ConsoleKey.N)
-                    {
-                        WriteLine(key.ToString());
-                        return isYes;
-                    }
+                    var help = HelpText.AutoBuild(options);
+                    help.Heading = $"HabBit[Version {GetVersion()}]";
+                    help.Copyright = $"Copyright (c) 2016 ArachisH";
+                    help.MaximumDisplayWidth = Console.WindowWidth;
+                    Console.WriteLine(help);
                 }
             }
-            finally { Console.CursorVisible = false; }
-        }
-        static void LoggerCallback(string value)
-        {
-            WriteLine(value);
+            finally { Console.CursorVisible = true; }
         }
 
-        static byte[] Compress(ShockwaveFlash flash)
+        public void Run()
         {
-            int uncompressedSizeMB = (((int)flash.FileLength / 1024) / 1024);
-            Console.Write($"Compressing... | ({uncompressedSizeMB}MB)");
+            var globalWatch = Stopwatch.StartNew();
 
-            byte[] compressedData = flash.Compress();
-            int compressedSizeMB = ((compressedData.Length / 1024) / 1024);
+            /* Step #1 - Decompression */
+            Decompress();
 
-            WriteLine($" -> ({compressedSizeMB}MB)");
-            return compressedData;
-        }
-        static bool Decompress(ShockwaveFlash flash)
-        {
-            if (flash.Compression != CompressionType.None)
+            /* Step #2 - Disassembling */
+            Disassemble();
+
+            /* Step #2.5 - Modification */
+            Modify();
+
+            /* Step #3 - Compression/Assembling */
+            Assemble();
+
+            Console.Write("Cleaning Up...");
+
+            using (var rsaKeyWriter = new StreamWriter(
+                Path.Combine(Options.OutputPath, "RSAKeys.txt")))
             {
-                Console.Clear();
-                int compressedSizeMB = ((flash.ToByteArray().Length / 1024) / 1024);
-                int uncompressedSizeMB = (((int)flash.FileLength / 1024) / 1024);
-
-                Console.Write($"Decompressing... | ({compressedSizeMB}MB)");
-                flash.Decompress();
-                WriteLine($" -> ({uncompressedSizeMB}MB)");
+                rsaKeyWriter.WriteLine("Exponent(e): {0}", _keys.Exponent);
+                rsaKeyWriter.WriteLine("Modulus(n): {0}", _keys.Modulus);
+                rsaKeyWriter.WriteLine("Private Exponent(d): {0}", _keys.PrivateExponent ?? "<Unknown>");
             }
-            return !flash.IsCompressed;
-        }
 
-        static string DumpHeaders(HGame game, bool isDumpingOutgoing)
-        {
-            IReadOnlyDictionary<ushort, ASClass> messageClasses =
-                (isDumpingOutgoing ? game.OutgoingMessages : game.IncomingMessages);
-
-            IOrderedEnumerable<KeyValuePair<string, List<ushort>>> organizedHeaders =
-                GetOrganizedHeadersByHashCount(game, messageClasses);
-
-            string headersDump = string.Empty;
-            string unusedHeadersDump = string.Empty;
-            string messageType = (isDumpingOutgoing ? "Outgoing" : "Incoming");
-            var unusedHeaders = new List<KeyValuePair<string, List<ushort>>>();
-            foreach (KeyValuePair<string, List<ushort>> organizedHeader in organizedHeaders)
+            if (Options.IsDumpingHeaders)
             {
-                if (organizedHeader.Value.Count == 1)
+                using (var headersWriter = new StreamWriter(
+                    Path.Combine(Options.OutputPath, "Headers.txt")))
                 {
-                    if (isDumpingOutgoing) UniqueOutMessageHashCount++;
-                    else UniqueInMessageHashCount++;
-                }
-                string messageHash = organizedHeader.Key;
-                foreach (ushort header in organizedHeader.Value)
-                {
-                    ASClass messageClass = messageClasses[header];
-                    string messageName = messageClass.Instance.QualifiedName.Name;
-                    ASMethod messageCtor = messageClass.Instance.Constructor;
+                    headersWriter.WriteLine("// Outgoing Messages | {0:n0}", Game.OutMessages.Count);
+                    WriteMessages("Outgoing", Game.OutMessages, headersWriter);
 
-                    string dump = $"{messageType}[{header}, {messageHash}] = {messageName}{messageCtor}";
-                    if (!isDumpingOutgoing)
-                    {
-                        ASClass inMsgParser = game.GetIncomingMessageParser(messageClass);
-                        dump += ($", Parser: {inMsgParser.Instance.QualifiedName.Name}");
-                    }
-                    dump += "\r\n";
-                    if (!game.IsMessageReferenced(messageClass))
-                    {
-                        unusedHeadersDump += ("[Dead]" + dump);
-                    }
-                    else headersDump += dump;
+                    headersWriter.WriteLine();
+
+                    headersWriter.WriteLine("// Incoming Messages | {0:n0}", Game.InMessages.Count);
+                    WriteMessages("Incoming", Game.InMessages, headersWriter);
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(unusedHeadersDump))
-                headersDump += unusedHeadersDump;
+            WriteLineSplit();
 
-            return headersDump.Trim();
+            globalWatch.Stop();
+            Console.WriteLine("Completion Time: " + GetLap(globalWatch));
         }
-        static string UpdateHeaders(string headersPath, HGame current, HGame previous, bool isUpdatingOutgoing)
+        public void Modify()
         {
-            IReadOnlyDictionary<ushort, ASClass> curMsgClasses =
-                (isUpdatingOutgoing ? current.OutgoingMessages : current.IncomingMessages);
+            _watch.Restart();
+            Console.WriteLine("Modifying...");
 
-            IReadOnlyDictionary<ushort, ASClass> preMsgClasses =
-                (isUpdatingOutgoing ? previous.OutgoingMessages : previous.IncomingMessages);
+            if (!string.IsNullOrWhiteSpace(Options.Revision))
+            {
+                string oldRevision = Game.Revision;
+                Game.Revision = Options.Revision;
 
-            string value = File.ReadAllText(headersPath);
-            MatchEvaluator replacer =
-                delegate (Match match)
+                Console.WriteLine($"     Revision Changed: {oldRevision} -> {Game.Revision}");
+            }
+
+            bool replacedPatterns = false;
+            if (Options.Patterns != null)
+            {
+                for (int i = 0, j = 0; i < Game.ValidHostsRegexPatterns.Length; i++)
                 {
-                    bool isOut = isUpdatingOutgoing;
-                    string endValue = match.Groups["end"].Value;
-                    string headerValue = match.Groups["header"].Value;
-
-                    ushort preHeader = 0;
-                    if (!ushort.TryParse(headerValue, out preHeader) ||
-                        !preMsgClasses.ContainsKey(preHeader))
+                    if (j >= Options.Patterns.Length) break;
+                    string newPattern = Options.Patterns[j++];
+                    if (string.IsNullOrWhiteSpace(newPattern))
                     {
-                        if (headerValue != "0000")
-                            return $"-1{endValue} //Invalid Header '{headerValue}'";
-                        else
-                            return ("-1" + endValue);
+                        i--;
+                        continue;
                     }
 
-                    ASClass msgClass = preMsgClasses[preHeader];
-                    string hash = previous.GetMessageHash(msgClass);
+                    replacedPatterns = true;
+                    string oldPattern = Game.ValidHostsRegexPatterns[i];
+                    Game.ValidHostsRegexPatterns[i] = newPattern;
 
-                    bool isDead = false;
-                    string result = string.Empty;
-                    IReadOnlyList<ASClass> curSimilars = current.GetMessages(hash);
-                    if (curSimilars == null)
-                    {
-                        return $"-1{endValue} //No Matches {msgClass.Instance.QualifiedName.Name}[{headerValue}]";
-                    }
-                    else
-                    {
-                        ASClass curMsgClass = curSimilars[0];
-                        isDead = !current.IsMessageReferenced(curMsgClass);
-
-                        if (curSimilars.Count == 1)
-                        {
-                            ushort curHeader = current.GetMessageHeader(curMsgClass);
-                            result = $"{curHeader}{endValue} //{headerValue}";
-                        }
-                        else
-                        {
-                            result = $"-1{endValue} //Duplicate Matches {msgClass.Instance.QualifiedName.Name}[{headerValue}] | {hash}";
-                        }
-                    }
-                    if (isDead)
-                    {
-                        result +=
-                            " | Dead Message(0 References)";
-                    }
-                    return result;
-                };
-
-            value = Regex.Replace(value,
-                "( |)//(.*?)\r\n", "\r\n", RegexOptions.Singleline).Trim();
-
-            if (value.Contains("-1"))
-            {
-                value = Regex.Replace(value,
-                    @"-\b1\b", "0000", RegexOptions.Multiline);
+                    Console.WriteLine($"     Regex Pattern Changed: {oldPattern} -> {newPattern}");
+                }
             }
 
-            value = Regex.Replace(value,
-                @"(\b(?<header>\d{1,4})\b)(?<end>[^\r|$]*)", replacer, RegexOptions.Multiline);
+            Console.Write("     Bypassing Domain Checks...");
+            Game.BypassDomainChecks(replacedPatterns).WriteLineResult();
 
-            return value;
+            Console.Write("     Replacing RSA Keys...");
+            Game.ReplaceRSAKeys(_keys.Exponent, _keys.Modulus).WriteLineResult();
+
+            WriteLineSplit(GetLap());
         }
-        static IOrderedEnumerable<KeyValuePair<string, List<ushort>>> GetOrganizedHeadersByHashCount(HGame game, IReadOnlyDictionary<ushort, ASClass> messageClasses)
+        public void Assemble()
         {
-            var unorganizedHeaders = new Dictionary<string, List<ushort>>();
-            foreach (ushort header in messageClasses.Keys)
+            _watch.Restart();
+            Console.Write("Assembling...");
+
+            Game.Assemble();
+            WriteLineSplit(" | " + GetLap());
+
+            byte[] compressed = null;
+            if (Options.Compression != null &&
+                Options.Compression != CompressionType.None)
             {
-                ASClass messageClass = messageClasses[header];
-                string messageHash = game.GetMessageHash(messageClass);
+                Game.Compression =
+                    (CompressionType)Options.Compression;
 
-                if (!unorganizedHeaders.ContainsKey(messageHash))
-                    unorganizedHeaders[messageHash] = new List<ushort>();
+                _watch.Restart();
+                Console.Write("Compressing({0})...", Game.Compression);
 
-                if (!unorganizedHeaders[messageHash].Contains(header))
-                    unorganizedHeaders[messageHash].Add(header);
+                compressed = Game.Compress();
+                WriteLineSplit(" | " + GetLap());
             }
-            return unorganizedHeaders.OrderBy(kvp => kvp.Value.Count);
+
+            string assembledPath = Path.Combine(
+                Options.OutputPath, "asmd_" + FileName);
+
+            File.WriteAllBytes(assembledPath,
+                compressed ?? Game.ToArray());
+        }
+        public void Decompress()
+        {
+            if (Game.IsCompressed)
+            {
+                _watch.Restart();
+                Console.Write("Decompressing({0})...", Game.Compression);
+
+                Game.Decompress();
+                WriteLineSplit(" | " + GetLap());
+            }
+        }
+        public void Disassemble()
+        {
+            _watch.Restart();
+            Console.Write("Disassembling...");
+
+            Game.Disassemble();
+            WriteLineSplit(" | " + GetLap());
         }
 
-        static void WriteLine()
+        private string GetLap()
         {
-            WriteLine(string.Empty);
+            return GetLap(_watch);
         }
-        static void WriteLine(string value)
+        private string GetLap(Stopwatch watch)
         {
-            if (!string.IsNullOrWhiteSpace(value))
-                value += "\r\n";
+            watch.Stop();
+            return $"{watch.Elapsed:s\\.ff} Seconds";
+        }
 
-            value += "---------------";
+        private void WriteMessages(string title,
+            IReadOnlyDictionary<ushort, ASClass> messages,
+            StreamWriter writer)
+        {
+            foreach (ushort header in messages.Keys)
+            {
+                ASInstance msgInstance = messages[header].Instance;
+                string msgName = msgInstance.QName.Name;
+
+                writer.WriteLine("{0}[{1}] = {2}",
+                    title, header, msgName);
+            }
+        }
+
+        private static Version GetVersion()
+        {
+            return Assembly.GetExecutingAssembly().GetName().Version;
+        }
+        private static double BytesToMB(long bytes)
+        {
+            return (bytes / 1024F) / 1024F;
+        }
+        private static void UpdateTitle(ShockwaveFlash flash)
+        {
+            var titleBuilder = new StringBuilder();
+            titleBuilder.Append(" | ");
+            titleBuilder.Append(Path.GetFileName(flash.Location));
+            titleBuilder.AppendFormat("({0:00.0} MB)", BytesToMB(flash.FileLength));
+            Console.Title += titleBuilder;
+        }
+
+        private void WriteLineSplit()
+        {
+            WriteLineSplit(string.Empty);
+        }
+        private void WriteLineSplit(string value)
+        {
             Console.WriteLine(value);
+            Console.WriteLine("---------------");
         }
     }
 }
