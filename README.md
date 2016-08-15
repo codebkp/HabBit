@@ -1,17 +1,10 @@
-# HabBit
-This application is capable of modifying  Habbo's game client to allow it to run anywhere, from anywhere, with custom RSA keys.
+# HabBit(C# 6)
+Application for modifying Habbo Hotel's AS3 flash client.
 
 ## Requirements
 * .NET Framework 4.5
-* (Source Only)IDE with C# 6 support.
 
-## Capabilties
-* Bypass local/remote host checks.
-* Dump Outgoing/Incoming message headers.
-* Replace client revision value in Outgoing[4000] message.
-* Public RSA key replacement, with the option to generate new 1024-bit keys.
-
-## Commands/Arguments
+## Arguments
 * [Required] `-g <path>` - The game client file path to modify.
 * [Optional] `-o <path>` - The output path for the re-assembled game client, and other resources.
 * [Optional] `-c <none|zlib|lzma>` - Override compression type to use after the game client has been assembled.
@@ -21,6 +14,12 @@ This application is capable of modifying  Habbo's game client to allow it to run
 * [Optional] `--patt <pattern1> <pattern...>` - Replaces the regex patterns found in the main Habbo class that validate where the client is being hosted from.
 * [Optional] `--genrsa <keySize>` - Creates a fresh batch of RSA keys(with private key), this flag will override the `--rsa` argument.
 * [Optional] `--rsa <exponent> <modulus>` - Overrides the client's public RSA keys with the ones provided. The provided keys should be in base-16(Hexadecimal).
+
+## Usages
+Generate 1024-bit RSA keys, replace revision, and override regex host check patterns.
+
+`-g "C:\Habbo.swf" --genrsa 1024 --rev "NEWPRODUCTION" --patt "(.*)" "[a-z]{3}"`
+
 
 Default RSA Keys
 ```
