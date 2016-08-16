@@ -141,12 +141,7 @@ namespace HabBit.Habbo
                     }
                 }
 
-                Instruction[] firstTwoInstructions =
-                    method.Body.GetInstructions().Take(2).ToArray();
-
-                if (firstTwoInstructions[0].OP != Operation.PushString)
-
-                    newInstructions.AddRange(method.Body.GetInstructions());
+                newInstructions.AddRange(method.Body.GetInstructions());
                 method.Body.SetInstructions(newInstructions);
             }
             return (modCount == 2);
