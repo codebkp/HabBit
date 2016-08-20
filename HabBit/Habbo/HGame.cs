@@ -11,6 +11,7 @@ using FlashInspect.Records;
 using FlashInspect.ActionScript;
 using FlashInspect.ActionScript.Traits;
 using FlashInspect.ActionScript.Instructions;
+using FlashInspect.ActionScript.Multinames;
 
 namespace HabBit.Habbo
 {
@@ -18,6 +19,7 @@ namespace HabBit.Habbo
     {
         private ASMethod _validHostsRegexChecker;
 
+        private readonly string[] _reservedNames;
         private readonly IList<DoABCTag> _abcTags;
         private readonly IDictionary<DoABCTag, ABCFile> _abcFiles;
         private readonly SortedDictionary<ushort, ASClass> _outMessages, _inMessages;
@@ -55,6 +57,18 @@ namespace HabBit.Habbo
         public HGame(byte[] data)
             : base(data)
         {
+            _reservedNames = new string[]
+            {
+                "if",
+                "do",
+                "get",
+                "for",
+                "false",
+                "true",
+                "while",
+                "package"
+            };
+
             _abcTags = new List<DoABCTag>(3);
             _abcFiles = new Dictionary<DoABCTag, ABCFile>(3);
 
@@ -72,7 +86,7 @@ namespace HabBit.Habbo
         {
             return BypassDomainChecks(false);
         }
-        public bool BypassDomainChecks(bool avoidValidHostsRegexChecks)
+        public bool BypassDomainChecks(bool avoidHostRegexChecks)
         {
             var domainChecks = new List<ASMethod>(2);
 
@@ -85,7 +99,7 @@ namespace HabBit.Habbo
             if (isLocalHostCheck != null)
                 domainChecks.Add(isLocalHostCheck);
 
-            if (!avoidValidHostsRegexChecks &&
+            if (!avoidHostRegexChecks &&
                 _validHostsRegexChecker != null)
             {
                 domainChecks.Add(_validHostsRegexChecker);
@@ -108,43 +122,313 @@ namespace HabBit.Habbo
                 DisableHostPrepender());
         }
 
+        public void FixRegisters()
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                ABCFile abc = GetABCFile(i);
+                var localNameIndices = new Dictionary<string, int>();
+                foreach (ASMethodBody body in abc.MethodBodies)
+                {
+                    // Can't fix jump instructions inside try/catch scopes, yet.
+                    if (body.Exceptions.Count > 0) continue;
+                    AS3Code code = body.ParseCode();
+
+                    bool hasSwitch = false;
+                    foreach (Instruction ins in code.Instructions)
+                    {
+                        if (ins.OP == Operation.Debug)
+                        {
+                            var debugIns = (DebugIns)ins;
+                            string localName = ("local" + debugIns.RegisterIndex);
+
+                            int localNameIndex = 0;
+                            if (!localNameIndices.TryGetValue(
+                                localName, out localNameIndex))
+                            {
+                                localNameIndex = abc.Pool.AddString(localName);
+                                localNameIndices[localName] = localNameIndex;
+                            }
+
+                            debugIns.NameIndex = localNameIndex;
+                        }
+                        else if (ins.OP == Operation.LookUpSwitch)
+                        {
+                            // Or switch statements..
+                            hasSwitch = true;
+                            break;
+                        }
+                    }
+
+                    if (!hasSwitch)
+                        body.Code = code.ToArray();
+                }
+            }
+        }
+        public void FixIdentifiers()
+        {
+            int invalidInstanceCount = 0;
+            // [qName][fixedName]
+            var fixedNS = new SortedDictionary<string, string>();
+            // [qName][namespace][fixedName]
+            var fixedIN = new SortedDictionary<string, SortedDictionary<string, string>>();
+            for (int i = 0; i < 3; i++)
+            {
+                ABCFile abc = GetABCFile(i);
+                ASConstantPool pool = abc.Pool;
+                try
+                {
+                    // We've implemented our own cache system.
+                    pool.RecycleIndices = false;
+
+                    #region Namespace Fixing
+                    // Several types of namespaces that share the same name.
+                    // private, protected, blah blah, cache the name index.
+                    var fixedNSIndices = new Dictionary<string, int>();
+                    for (int j = 1; j < pool.Namespaces.Count; j++)
+                    {
+                        ASNamespace @namespace = pool.Namespaces[j];
+                        if (@namespace.Name.StartsWith("_-") ||
+                            _reservedNames.Contains(@namespace.Name.Trim()))
+                        {
+                            string fixedName = string.Empty;
+                            if (!fixedNS.TryGetValue(@namespace.Name, out fixedName))
+                            {
+                                fixedName = ("ns_" + (fixedNS.Count + 1));
+                                fixedNS.Add(@namespace.Name, fixedName);
+                            }
+
+                            int fixedNameIndex = 0;
+                            if (!fixedNSIndices.TryGetValue(fixedName, out fixedNameIndex))
+                            {
+                                fixedNameIndex = abc.Pool.AddString(fixedName);
+                                fixedNSIndices.Add(fixedName, fixedNameIndex);
+                            }
+                            @namespace.NameIndex = fixedNameIndex;
+                        }
+                    }
+                    #endregion
+
+                    #region Class/Instance Fixing
+                    var fixedINIndices = new Dictionary<string, int>();
+                    for (int j = 0; j < abc.Instances.Count; j++)
+                    {
+                        ASInstance instance = abc.Instances[j];
+                        var qName = (QName)instance.QName.Data;
+
+                        if (qName.Name.StartsWith("_-") ||
+                            _reservedNames.Contains(qName.Name.Trim()))
+                        {
+                            SortedDictionary<string, string> fixedNames = null;
+                            string fixedName = ("class_" + (++invalidInstanceCount));
+                            if (!fixedIN.TryGetValue(qName.Name, out fixedNames))
+                            {
+                                fixedNames = new SortedDictionary<string, string>();
+                                fixedIN.Add(qName.Name, fixedNames);
+                            }
+                            fixedNames.Add(qName.Namespace.Name, fixedName);
+
+                            int fixedNameIndex = 0;
+                            if (!fixedINIndices.TryGetValue(fixedName, out fixedNameIndex))
+                            {
+                                fixedNameIndex = abc.Pool.AddString(fixedName);
+                                fixedINIndices.Add(fixedName, fixedNameIndex);
+                            }
+                            qName.NameIndex = fixedNameIndex;
+                        }
+                    }
+                    #endregion
+
+                    // TODO: Trait name fixing.
+
+                    #region Multiname Fixing (Shared Classes/Instances, Traits(soon))
+                    for (int j = 1; j < pool.Multinames.Count; j++)
+                    {
+                        ASMultiname multiname = pool.Multinames[j];
+                        IMultiname data = multiname.Data;
+
+                        SortedDictionary<string, string> fixedNames = null;
+                        if (!string.IsNullOrWhiteSpace(data.Name) &&
+                            fixedIN.TryGetValue(data.Name, out fixedNames))
+                        {
+                            string nsName = string.Empty;
+                            switch (data.Type)
+                            {
+                                case ConstantType.QName:
+                                {
+                                    var qName = (QName)data;
+                                    nsName = qName.Namespace.Name;
+                                    break;
+                                }
+                                case ConstantType.Multiname:
+                                {
+                                    var mName = (Multiname)data;
+                                    nsName = mName.NamespaceSet.GetNamespaces().First().Name;
+                                    break;
+                                }
+                            }
+
+                            string fixedName = string.Empty;
+                            if (!fixedNames.TryGetValue(nsName, out fixedName))
+                            {
+                                continue;
+                            }
+
+                            int fixedNameIndex = 0;
+                            if (!fixedINIndices.TryGetValue(fixedName, out fixedNameIndex))
+                            {
+                                fixedNameIndex = pool.AddString(fixedName);
+                                fixedINIndices.Add(fixedName, fixedNameIndex);
+                            }
+                            data.NameIndex = fixedNameIndex;
+                        }
+                    }
+                    #endregion
+                }
+                finally { pool.RecycleIndices = true; }
+            }
+
+            #region Symbol Fixing
+            foreach (SymbolClassTag symbolTag in Tags
+                .Where(t => t.Type == FlashTagType.SymbolClass)
+                .Cast<SymbolClassTag>())
+            {
+                for (int i = 0; i < symbolTag.Names.Count; i++)
+                {
+                    string name = symbolTag.Names[i];
+
+                    if (name.Contains("_-") ||
+                        _reservedNames.Contains(name.Trim()))
+                    {
+                        string qName = name;
+                        string nsName = string.Empty;
+
+                        if (name.Contains("."))
+                        {
+                            string[] names = name.Split('.');
+                            nsName = names[0];
+                            qName = names[1];
+                        }
+
+                        name = string.Empty;
+                        if (fixedNS.ContainsKey(nsName))
+                        {
+                            nsName = fixedNS[nsName];
+                            name = (nsName + ".");
+                        }
+
+                        SortedDictionary<string, string> fixedNames = null;
+                        if (fixedIN.TryGetValue(qName, out fixedNames))
+                        {
+                            qName = fixedNames[nsName];
+                        }
+
+                        symbolTag.Names[i] = (name + qName);
+                    }
+                    // TODO: What if there is a symbol named: _-000.get ?
+                }
+            }
+            #endregion
+        }
+        public bool DisableHandshake()
+        {
+            ABCFile abc = GetABCFile(2);
+            ASInstance commDemo = abc.GetClasses("HabboCommunicationDemo")[0].Instance;
+
+            ASMethod connInit = commDemo.GetMethods(1, "void")
+                .Where(m => m.Parameters[0].IsOptional &&
+                            m.Parameters[0].Type.Name == "Event")
+                .First();
+
+            ASMethod pubVerifier = commDemo.GetMethods(1, "void")
+                .Where(m => m.Body.MaxStack == 4 &&
+                            m.Body.LocalCount == 10 &&
+                            m.Body.InitialScopeDepth == 5 &&
+                            m.Body.MaxScopeDepth == 6)
+                .FirstOrDefault();
+
+            if (connInit == null ||
+                pubVerifier == null)
+            {
+                return false;
+            }
+
+            AS3Code pubVerifierCode =
+                pubVerifier.Body.ParseCode();
+
+            // Get the 13 instructions starting with: debugline 320
+            IEnumerable<Instruction> postShakeInstructions = pubVerifierCode.Instructions
+                .SkipWhile(i => i.OP != Operation.DebugLine ||
+                                ((DebugLineIns)i).LineNumber != 320)
+                .Take(13);
+
+            AS3Code connInitCode = connInit.Body.ParseCode();
+            foreach (Instruction instruction in connInitCode.Instructions)
+            {
+                if (JumpInstruction.IsValid(instruction.OP))
+                {
+                    var jumper = (JumpInstruction)instruction;
+
+                    List<Instruction> jumpScope =
+                        connInitCode.JumpScopes[jumper];
+
+                    jumpScope.RemoveRange(
+                        jumpScope.Count - 6, 6);
+
+                    jumpScope.AddRange(postShakeInstructions);
+                    break;
+                }
+            }
+            connInit.Body.Code = connInitCode.ToArray();
+            return true;
+        }
         public bool ReplaceRSAKeys(string exponent, string modulus)
         {
             ABCFile abc = GetABCFile(2);
-            ASClass keyObfuscClass = abc.GetClasses("KeyObfuscator")[0];
+            ASClass keyObfClass = abc.GetClasses("KeyObfuscator")[0];
 
-            var newInstructions = new List<Instruction>();
-            var pushKeyInst = new PushStringIns(abc.Pool);
-
-            newInstructions.Add(pushKeyInst);
-            newInstructions.Add(new Instruction(Operation.ReturnValue));
-
-            int modCount = 0;
-            foreach (ASMethod method in keyObfuscClass.GetMethods(0, "String"))
+            int modifyCount = 0;
+            foreach (ASMethod method in keyObfClass.GetMethods(0, "String"))
             {
-                List<Instruction> instructions =
-                    method.Body.GetInstructions().ToList();
-
+                int keyIndex = 0;
                 switch (method.TraitId)
                 {
-                    case 6: // Return Modulus Method
+                    // Get Modulus Method
+                    case 6:
                     {
-                        modCount++;
-                        pushKeyInst.ValueIndex = abc.Pool.AddString(modulus);
+                        modifyCount++;
+                        keyIndex = abc.Pool.AddString(modulus);
                         break;
                     }
-                    case 7: // Return Exponent Method
+                    // Get Exponent Method
+                    case 7:
                     {
-                        modCount++;
-                        pushKeyInst.ValueIndex = abc.Pool.AddString(exponent);
+                        modifyCount++;
+                        keyIndex = abc.Pool.AddString(exponent);
                         break;
                     }
+
+                    // Continue enumerating before reading grabbing instructions.
+                    default: continue;
                 }
 
-                newInstructions.AddRange(method.Body.GetInstructions());
-                method.Body.SetInstructions(newInstructions);
+                AS3Code methodCode = method.Body.ParseCode();
+                List<Instruction> instructions = methodCode.Instructions;
+
+                if (instructions.Count >= 2 &&
+                    instructions[0].OP != Operation.PushString &&
+                    instructions[1].OP != Operation.ReturnValue)
+                {
+                    instructions.InsertRange(0, new Instruction[]
+                    {
+                        new PushStringIns(abc.Pool, keyIndex),
+                        new Instruction(Operation.ReturnValue)
+                    });
+                }
+
+                method.Body.Code = methodCode.ToArray();
             }
-            return (modCount == 2);
+            return (modifyCount == 2);
         }
 
         private void FindMessages()
@@ -153,10 +437,12 @@ namespace HabBit.Habbo
             ASClass messagesClass = abc.GetClasses("HabboMessages")[0];
 
             ASMethod messagesCtor = messagesClass.Constructor;
+            AS3Code code = messagesCtor.Body.ParseCode();
+
             int inMapTypeIndex = messagesClass.Traits[0].QNameIndex;
             int outMapTypeIndex = messagesClass.Traits[1].QNameIndex;
 
-            List<Instruction> instructions = messagesCtor.Body.GetInstructions()
+            List<Instruction> instructions = code.Instructions
                 .Where(i => i.OP == Operation.GetLex ||
                             i.OP == Operation.PushShort ||
                             i.OP == Operation.PushByte).ToList();
@@ -201,42 +487,42 @@ namespace HabBit.Habbo
                 commMngr.GetMethod(0, "void", "initComponent");
 
             string connectMethodName = string.Empty;
-            foreach (Instruction instruction in initCompMethod.Body
-                .GetInstructions().Reverse())
-            {
-                if (instruction.OP == Operation.CallPropVoid)
-                {
-                    connectMethodName =
-                        ((CallPropVoidIns)instruction).PropertyName.Name;
+            AS3Code initCompCode = initCompMethod.Body.ParseCode();
 
-                    break;
-                }
+            initCompCode.Instructions.Reverse(); // Start from bottom.
+            foreach (Instruction instruction in initCompCode.Instructions)
+            {
+                if (instruction.OP != Operation.CallPropVoid) continue;
+                var callPropVoidIns = (CallPropVoidIns)instruction;
+
+                connectMethodName = callPropVoidIns.PropertyName.Name;
+                break;
             }
 
             ASMethod connectMethod = commMngr
                 .GetMethod(0, "void", connectMethodName);
 
-            var instructions = new List<Instruction>(
-                connectMethod.Body.GetInstructions());
-
-            var getPropSet = new List<Instruction>();
-            getPropSet.Add(new Instruction(Operation.GetLocal_0));
-            getPropSet.Add(new FindPropStrictIns(abc.Pool, getPropertyNameIndex));
-            getPropSet.Add(new PushStringIns(abc.Pool, "connection.info.host"));
-            getPropSet.Add(new CallPropertyIns(abc.Pool, getPropertyNameIndex, 1));
-            getPropSet.Add(new InitPropertyIns(abc.Pool, infoHostSlotNameIndex));
-            instructions.InsertRange(0, getPropSet);
+            AS3Code connectCode = connectMethod.Body.ParseCode();
+            List<Instruction> instructions = connectCode.Instructions;
+            instructions.InsertRange(4, new Instruction[]
+            {
+                new Instruction(Operation.GetLocal_0),
+                new FindPropStrictIns(abc.Pool, getPropertyNameIndex),
+                new PushStringIns(abc.Pool, "connection.info.host"),
+                new CallPropertyIns(abc.Pool, getPropertyNameIndex, 1),
+                new InitPropertyIns(abc.Pool, infoHostSlotNameIndex)
+            });
 
             int magicInverseIndex = abc.Pool.AddInteger(65290);
             foreach (Instruction instruction in instructions)
             {
                 if (instruction.OP != Operation.PushInt) continue;
-
                 var pushIntIns = (PushIntIns)instruction;
+
                 pushIntIns.ValueIndex = magicInverseIndex;
             }
 
-            connectMethod.Body.SetInstructions(instructions);
+            connectMethod.Body.Code = connectCode.ToArray();
             return true;
         }
         private void FindValidHostsRegexChecker()
@@ -248,9 +534,11 @@ namespace HabBit.Habbo
                 .Where(m => m.Parameters[0].Type.Name == "String" &&
                             m.Parameters[1].Type.Name == "Object").First();
 
+            AS3Code validHostCode =
+                _validHostsRegexChecker.Body.ParseCode();
+
             int index = 0;
-            foreach (Instruction instruction in
-                _validHostsRegexChecker.Body.GetInstructions())
+            foreach (Instruction instruction in validHostCode.Instructions)
             {
                 // All of the regex patterns were retrieved, I think.
                 if (index == MAX_REGEX_PATTERNS) break;
@@ -267,8 +555,8 @@ namespace HabBit.Habbo
             ASInstance messageInstance = messageClass.Instance;
             ASMethod toArrayMethod = messageInstance.GetMethods(0, "Array").First();
 
-            foreach (Instruction instruction in
-                toArrayMethod.Body.GetInstructions())
+            AS3Code toArrayCode = toArrayMethod.Body.ParseCode();
+            foreach (Instruction instruction in toArrayCode.Instructions)
             {
                 if (instruction.OP != Operation.PushString) continue;
                 var pushStringInst = (instruction as PushStringIns);

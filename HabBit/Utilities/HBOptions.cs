@@ -31,7 +31,12 @@ namespace HabBit.Utilities
             HelpText = "Dump all Outgoing/Incoming message headers.",
             DefaultValue = false)]
         public bool IsDumpingHeaders { get; set; }
-        
+
+        [Option("dhand",
+            HelpText = "Disables the handshake process within the client, data encryption will also be disabled due to this.",
+            DefaultValue = false)]
+        public bool IsDisablingHandshake { get; set; }
+
         [OptionArray("rsa",
             HelpText = "  Overrides the client's public RSA keys with the ones provided. The provided keys should be in base-16(Hexadecimal).",
             MetaValue = "\b <exponent> <modulus>")]
@@ -41,6 +46,14 @@ namespace HabBit.Utilities
             HelpText = "  Creates a fresh batch of RSA keys(with private key), this flag will override the '--rsa' argument.",
             MetaValue = "\b <keySize>")]
         public int? RSAKeySize { get; set; }
+
+        [Option("fixiden",
+            HelpText = "Fixes every corrupted class/namespace/symbol name.")]
+        public bool IsFixingIdentifiers { get; set; }
+
+        [Option("fixreg",
+            HelpText = "Modifieds the name of every register in a Debug instruction in every method body to a unique name.")]
+        public bool IsFixingRegisters { get; set; }
 
         [OptionArray("patt",
             HelpText = "  Replaces the regex patterns found in the main Habbo class that validate where the client is being hosted from.",

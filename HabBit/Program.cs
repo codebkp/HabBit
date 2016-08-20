@@ -47,22 +47,25 @@ namespace HabBit
                 Options.Compression = Game.Compression;
             }
 
-            if (Options.RSAKeySize != null)
+            if (!Options.IsDisablingHandshake)
             {
-                Console.WriteLine($"Generating {Options.RSAKeySize}-bit RSA Keys...");
-                _keys = new HBRSAKeys((int)Options.RSAKeySize);
-                WriteLineSplit();
-            }
-            else if (Options.RSAKeys?.Length >= 2)
-            {
-                string e = Options.RSAKeys[0];
-                string n = Options.RSAKeys[1];
-                _keys = new HBRSAKeys(e, n);
-            }
-            else
-            {
-                _keys = new HBRSAKeys(DEFAULT_EXPONENT,
-                    DEFAULT_MODULUS, DEFAULT_PRIVATE_EXPONENT);
+                if (Options.RSAKeySize != null)
+                {
+                    Console.WriteLine($"Generating {Options.RSAKeySize}-bit RSA Keys...");
+                    _keys = new HBRSAKeys((int)Options.RSAKeySize);
+                    WriteLineSplit();
+                }
+                else if (Options.RSAKeys?.Length >= 2)
+                {
+                    string e = Options.RSAKeys[0];
+                    string n = Options.RSAKeys[1];
+                    _keys = new HBRSAKeys(e, n);
+                }
+                else
+                {
+                    _keys = new HBRSAKeys(DEFAULT_EXPONENT,
+                        DEFAULT_MODULUS, DEFAULT_PRIVATE_EXPONENT);
+                }
             }
 
             FileName = Path.GetFileName(Game.Location);
@@ -106,35 +109,40 @@ namespace HabBit
             /* Step #3 - Compression/Assembling */
             Assemble();
 
-            Console.WriteLine("Cleaning Up...");
-            Console.WriteLine();
-
-            Console.WriteLine("    Saving RSA Keys...");
-            using (var rsaKeyWriter = new StreamWriter(
-                Path.Combine(Options.OutputPath, "RSAKeys.txt")))
+            if (!Options.IsDisablingHandshake || Options.IsDumpingHeaders)
             {
-                rsaKeyWriter.WriteLine("Exponent(e): {0}", _keys.Exponent);
-                rsaKeyWriter.WriteLine("Modulus(n): {0}", _keys.Modulus);
-                rsaKeyWriter.WriteLine("Private Exponent(d): {0}", _keys.PrivateExponent ?? "<Unknown>");
-            }
+                Console.WriteLine("Cleaning Up...");
+                Console.WriteLine();
 
-            if (Options.IsDumpingHeaders)
-            {
-                Console.WriteLine("    Dumping Headers...");
-                using (var headersWriter = new StreamWriter(
-                    Path.Combine(Options.OutputPath, "Headers.txt")))
+                if (!Options.IsDisablingHandshake)
                 {
-                    headersWriter.WriteLine("// Outgoing Messages | {0:n0}", Game.OutMessages.Count);
-                    WriteMessages("Outgoing", Game.OutMessages, headersWriter);
-
-                    headersWriter.WriteLine();
-
-                    headersWriter.WriteLine("// Incoming Messages | {0:n0}", Game.InMessages.Count);
-                    WriteMessages("Incoming", Game.InMessages, headersWriter);
+                    Console.WriteLine("    Saving RSA Keys...");
+                    using (var rsaKeyWriter = new StreamWriter(
+                        Path.Combine(Options.OutputPath, "RSAKeys.txt")))
+                    {
+                        rsaKeyWriter.WriteLine("Exponent(e): {0}", _keys.Exponent);
+                        rsaKeyWriter.WriteLine("Modulus(n): {0}", _keys.Modulus);
+                        rsaKeyWriter.WriteLine("Private Exponent(d): {0}", _keys.PrivateExponent ?? "<Unknown>");
+                    }
                 }
-            }
 
-            WriteLineSplit();
+                if (Options.IsDumpingHeaders)
+                {
+                    Console.WriteLine("    Dumping Headers...");
+                    using (var headersWriter = new StreamWriter(
+                        Path.Combine(Options.OutputPath, "Headers.txt")))
+                    {
+                        headersWriter.WriteLine("// Outgoing Messages | {0:n0}", Game.OutMessages.Count);
+                        WriteMessages("Outgoing", Game.OutMessages, headersWriter);
+
+                        headersWriter.WriteLine();
+
+                        headersWriter.WriteLine("// Incoming Messages | {0:n0}", Game.InMessages.Count);
+                        WriteMessages("Incoming", Game.InMessages, headersWriter);
+                    }
+                }
+                WriteLineSplit();
+            }
 
             globalWatch.Stop();
             Console.WriteLine("Completion Time: {0:s\\.ff} Seconds", globalWatch.Elapsed);
@@ -173,11 +181,31 @@ namespace HabBit
                 }
             }
 
-            Console.Write("    Replacing RSA Keys...");
-            Game.ReplaceRSAKeys(_keys.Exponent, _keys.Modulus).WriteLineResult();
+
+            if (Options.IsDisablingHandshake)
+            {
+                Console.Write("    Disabling Handshake...");
+                Game.DisableHandshake().WriteLineResult();
+            }
+            else
+            {
+                Console.Write("    Replacing RSA Keys...");
+                Game.ReplaceRSAKeys(_keys.Exponent, _keys.Modulus).WriteLineResult();
+            }
 
             Console.Write("    Bypassing Domain Checks...");
             Game.BypassDomainChecks(replacedPatterns).WriteLineResult();
+
+            if (Options.IsFixingRegisters)
+            {
+                Console.WriteLine($"    Fixing Register Names...");
+                Game.FixRegisters();
+            }
+            if (Options.IsFixingIdentifiers)
+            {
+                Console.WriteLine("    Fixing Identifiers...");
+                Game.FixIdentifiers();
+            }
 
             WriteLineSplit();
         }
