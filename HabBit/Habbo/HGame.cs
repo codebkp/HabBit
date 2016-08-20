@@ -10,8 +10,8 @@ using FlashInspect.Tags;
 using FlashInspect.Records;
 using FlashInspect.ActionScript;
 using FlashInspect.ActionScript.Traits;
-using FlashInspect.ActionScript.Instructions;
 using FlashInspect.ActionScript.Multinames;
+using FlashInspect.ActionScript.Instructions;
 
 namespace HabBit.Habbo
 {
