@@ -124,49 +124,11 @@ namespace HabBit.Habbo
                 DisableHostPrepender());
         }
 
-        public void FixRegisters()
+        public int FixIdentifiers()
         {
-            for (int i = 0; i < 3; i++)
-            {
-                ABCFile abc = GetABCFile(i);
-                var localNameIndices = new Dictionary<string, int>();
-                foreach (ASMethodBody body in abc.MethodBodies)
-                {
-                    if (body.Exceptions.Count > 0) continue; // Try/Catch blocks not supported in jump fixing process.
-
-                    ASCode code = body.ParseCode();
-                    if (code.DebugInstructions.Count == 0) continue; // Nothing to modify.
-                    if (code.Operations.Contains(Operation.LookUpSwitch)) continue; // Switch statements not supported in jump fixing process.
-
-                    List<ASParameter> parameters = body.Method.Parameters;
-                    for (int j = 0, paramId = 1, locId = 1; j < code.DebugInstructions.Count; j++)
-                    {
-                        string regName = string.Empty;
-                        DebugIns debugIns = code.DebugInstructions[j];
-                        if (j < parameters.Count)
-                        {
-                            regName = ("param" + paramId++);
-                        }
-                        else
-                        {
-                            regName = ("local" + locId++);
-                        }
-
-                        int regNameIndex = 0;
-                        if (!localNameIndices.TryGetValue(regName, out regNameIndex))
-                        {
-                            regNameIndex = abc.Pool.AddString(regName);
-                            localNameIndices[regName] = regNameIndex;
-                        }
-                        debugIns.NameIndex = regNameIndex;
-                    }
-                    body.Code = code.ToArray();
-                }
-            }
-        }
-        public void FixIdentifiers()
-        {
+            int identifiersRenamed = 0;
             int invalidInstanceCount = 0;
+            int invalidInterfaceCount = 0;
             // [qName][fixedName]
             var fixedNS = new SortedDictionary<string, string>();
             // [qName][namespace][fixedName]
@@ -203,6 +165,8 @@ namespace HabBit.Habbo
                                 fixedNameIndex = pool.AddString(fixedName);
                                 fixedNSIndices.Add(fixedName, fixedNameIndex);
                             }
+
+                            identifiersRenamed++;
                             @namespace.NameIndex = fixedNameIndex;
                         }
                     }
@@ -219,7 +183,14 @@ namespace HabBit.Habbo
                             _reservedNames.Contains(qName.Name.Trim()))
                         {
                             SortedDictionary<string, string> fixedNames = null;
-                            string fixedName = ("class_" + (++invalidInstanceCount));
+
+                            string fixedName = string.Empty;
+                            if (instance.Flags.HasFlag(ClassFlags.Interface))
+                            {
+                                fixedName = ("interface_" + (++invalidInterfaceCount));
+                            }
+                            else fixedName = ("class_" + (++invalidInstanceCount));
+                            
                             if (!fixedIN.TryGetValue(qName.Name, out fixedNames))
                             {
                                 fixedNames = new SortedDictionary<string, string>();
@@ -233,6 +204,8 @@ namespace HabBit.Habbo
                                 fixedNameIndex = pool.AddString(fixedName);
                                 fixedINIndices.Add(fixedName, fixedNameIndex);
                             }
+
+                            identifiersRenamed++;
                             qName.NameIndex = fixedNameIndex;
                         }
                     }
@@ -279,6 +252,8 @@ namespace HabBit.Habbo
                                 fixedNameIndex = pool.AddString(fixedName);
                                 fixedINIndices.Add(fixedName, fixedNameIndex);
                             }
+
+                            identifiersRenamed++;
                             data.NameIndex = fixedNameIndex;
                         }
                     }
@@ -295,9 +270,7 @@ namespace HabBit.Habbo
                 for (int i = 0; i < symbolTag.Names.Count; i++)
                 {
                     string name = symbolTag.Names[i];
-
-                    if (name.Contains("_-") ||
-                        _reservedNames.Contains(name.Trim()))
+                    if (name.Contains("_-") || _reservedNames.Contains(name.Trim()))
                     {
                         string qName = name;
                         string nsName = string.Empty;
@@ -322,12 +295,59 @@ namespace HabBit.Habbo
                             qName = fixedNames[nsName];
                         }
 
+                        identifiersRenamed++;
                         symbolTag.Names[i] = (name + qName);
                     }
                     // TODO: What if there is a symbol named: _-000.get ?
                 }
             }
             #endregion
+
+            return identifiersRenamed;
+        }
+        public int RenameRegisters()
+        {
+            int registersFixed = 0;
+            for (int i = 0; i < 3; i++)
+            {
+                ABCFile abc = GetABCFile(i);
+                var localNameIndices = new Dictionary<string, int>();
+                foreach (ASMethodBody body in abc.MethodBodies)
+                {
+                    if (body.Exceptions.Count > 0) continue; // Try/Catch blocks not supported in jump fixing process.
+
+                    ASCode code = body.ParseCode();
+                    if (code.DebugInstructions.Count == 0) continue; // Nothing to modify.
+                    if (code.Operations.Contains(Operation.LookUpSwitch)) continue; // Switch statements not supported in jump fixing process.
+
+                    List<ASParameter> parameters = body.Method.Parameters;
+                    for (int j = 0, paramId = 1, locId = 1; j < code.DebugInstructions.Count; j++)
+                    {
+                        string regName = string.Empty;
+                        DebugIns debugIns = code.DebugInstructions[j];
+                        if (j < parameters.Count)
+                        {
+                            regName = ("param" + paramId++);
+                        }
+                        else
+                        {
+                            regName = ("local" + locId++);
+                        }
+
+                        int regNameIndex = 0;
+                        if (!localNameIndices.TryGetValue(regName, out regNameIndex))
+                        {
+                            regNameIndex = abc.Pool.AddString(regName);
+                            localNameIndices[regName] = regNameIndex;
+                        }
+                        debugIns.NameIndex = regNameIndex;
+                    }
+
+                    registersFixed++;
+                    body.Code = code.ToArray();
+                }
+            }
+            return registersFixed;
         }
         public bool DisableHandshake()
         {
