@@ -14,6 +14,9 @@ Application for modifying Habbo Hotel's AS3 flash client.
 * [Optional] `--patt <pattern1> <pattern...>` - Replaces the regex patterns found in the main Habbo class that validate where the client is being hosted from.
 * [Optional] `--genrsa <keySize>` - Creates a fresh batch of RSA keys(with private key), this flag will override the `--rsa` argument.
 * [Optional] `--rsa <exponent> <modulus>` - Overrides the client's public RSA keys with the ones provided. The provided keys should be in base-16(Hexadecimal).
+* [Optional] `--dhand` - Disables the handshake process within the client.
+* [Optional] `--fixiden` - Fixes every corrupted class/namespace/symbol name.
+* [Optional] `--renreg` - Renames every Debug's instruction register name in every method body to a unique value.
 
 ## Usages
 Generate 1024-bit RSA keys, replace revision, and override regex host check patterns.
