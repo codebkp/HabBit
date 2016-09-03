@@ -182,7 +182,7 @@ namespace HabBit
                         $"    Valid Host Pattern Changed[{i}]: \"{newPattern}\"");
                 }
             }
-            
+
             if (Options.IsDisablingHandshake)
             {
                 Console.Write("    Disabling Handshake...");
@@ -197,15 +197,15 @@ namespace HabBit
             Console.Write("    Bypassing Domain Checks...");
             Game.BypassDomainChecks(replacedPatterns).WriteLineResult();
 
-            if (Options.IsFixingRegisters)
+            if (Options.IsRenamingRegisters)
             {
-                Console.WriteLine($"    Fixing Register Names...");
-                Game.FixRegisters();
+                Console.Write($"    Renaming Registers...");
+                Game.RenameRegisters().WriteLineResult("Registers Renamed");
             }
             if (Options.IsFixingIdentifiers)
             {
-                Console.WriteLine("    Fixing Identifiers...");
-                Game.FixIdentifiers();
+                Console.Write("    Fixing Identifiers...");
+                Game.FixIdentifiers().WriteLineResult("Identifiers Fixed");
             }
 
             WriteLineSplit();
