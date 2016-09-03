@@ -24,7 +24,6 @@ namespace HabBit.Habbo
         private readonly IDictionary<DoABCTag, ABCFile> _abcFiles;
         private readonly SortedDictionary<ushort, ASClass> _outMessages, _inMessages;
 
-        // There are only four patterns as of 08/08/2016.
         private const int MAX_REGEX_PATTERNS = 4;
 
         public ReadOnlyDictionary<ushort, ASClass> InMessages { get; }
@@ -45,7 +44,6 @@ namespace HabBit.Habbo
             }
         }
 
-        // These will be set in their respective constant pool prior to being assembled.
         private readonly int[] _validHostsRegexPatternsIndices;
         public string[] ValidHostsRegexPatterns { get; }
 
@@ -59,12 +57,16 @@ namespace HabBit.Habbo
         {
             _reservedNames = new string[]
             {
+                "in",
                 "if",
                 "do",
+                "var",
                 "get",
                 "for",
+                "class",
                 "false",
                 "true",
+                "import",
                 "while",
                 "package"
             };
@@ -130,38 +132,35 @@ namespace HabBit.Habbo
                 var localNameIndices = new Dictionary<string, int>();
                 foreach (ASMethodBody body in abc.MethodBodies)
                 {
-                    // Can't fix jump instructions inside try/catch scopes, yet.
-                    if (body.Exceptions.Count > 0) continue;
-                    AS3Code code = body.ParseCode();
+                    if (body.Exceptions.Count > 0) continue; // Try/Catch blocks not supported in jump fixing process.
 
-                    bool hasSwitch = false;
-                    foreach (Instruction ins in code.Instructions)
+                    ASCode code = body.ParseCode();
+                    if (code.DebugInstructions.Count == 0) continue; // Nothing to modify.
+                    if (code.Operations.Contains(Operation.LookUpSwitch)) continue; // Switch statements not supported in jump fixing process.
+
+                    List<ASParameter> parameters = body.Method.Parameters;
+                    for (int j = 0, paramId = 1, locId = 1; j < code.DebugInstructions.Count; j++)
                     {
-                        if (ins.OP == Operation.Debug)
+                        string regName = string.Empty;
+                        DebugIns debugIns = code.DebugInstructions[j];
+                        if (j < parameters.Count)
                         {
-                            var debugIns = (DebugIns)ins;
-                            string localName = ("local" + debugIns.RegisterIndex);
-
-                            int localNameIndex = 0;
-                            if (!localNameIndices.TryGetValue(
-                                localName, out localNameIndex))
-                            {
-                                localNameIndex = abc.Pool.AddString(localName);
-                                localNameIndices[localName] = localNameIndex;
-                            }
-
-                            debugIns.NameIndex = localNameIndex;
+                            regName = ("param" + paramId++);
                         }
-                        else if (ins.OP == Operation.LookUpSwitch)
+                        else
                         {
-                            // Or switch statements..
-                            hasSwitch = true;
-                            break;
+                            regName = ("local" + locId++);
                         }
+
+                        int regNameIndex = 0;
+                        if (!localNameIndices.TryGetValue(regName, out regNameIndex))
+                        {
+                            regNameIndex = abc.Pool.AddString(regName);
+                            localNameIndices[regName] = regNameIndex;
+                        }
+                        debugIns.NameIndex = regNameIndex;
                     }
-
-                    if (!hasSwitch)
-                        body.Code = code.ToArray();
+                    body.Code = code.ToArray();
                 }
             }
         }
@@ -201,7 +200,7 @@ namespace HabBit.Habbo
                             int fixedNameIndex = 0;
                             if (!fixedNSIndices.TryGetValue(fixedName, out fixedNameIndex))
                             {
-                                fixedNameIndex = abc.Pool.AddString(fixedName);
+                                fixedNameIndex = pool.AddString(fixedName);
                                 fixedNSIndices.Add(fixedName, fixedNameIndex);
                             }
                             @namespace.NameIndex = fixedNameIndex;
@@ -231,7 +230,7 @@ namespace HabBit.Habbo
                             int fixedNameIndex = 0;
                             if (!fixedINIndices.TryGetValue(fixedName, out fixedNameIndex))
                             {
-                                fixedNameIndex = abc.Pool.AddString(fixedName);
+                                fixedNameIndex = pool.AddString(fixedName);
                                 fixedINIndices.Add(fixedName, fixedNameIndex);
                             }
                             qName.NameIndex = fixedNameIndex;
@@ -333,53 +332,113 @@ namespace HabBit.Habbo
         public bool DisableHandshake()
         {
             ABCFile abc = GetABCFile(2);
-            ASInstance commDemo = abc.GetClasses("HabboCommunicationDemo")[0].Instance;
+            ASInstance socketConnection = abc.GetClasses("SocketConnection")[0].Instance;
+            ASInstance habboCommunicationDemo = abc.GetClasses("HabboCommunicationDemo")[0].Instance;
 
-            ASMethod connInit = commDemo.GetMethods(1, "void")
+            ASMethod sendMethod = socketConnection.GetMethod(1, "Boolean", "send");
+            if (sendMethod == null) return false;
+
+            ASCode sendCode = sendMethod.Body.ParseCode();
+            sendCode.Deobfuscate(DeobfuscationLevels.ControlFlow);
+            for (int i = 0, neCount = 0, isComplete = 0; i < sendCode.Instructions.Count; i++)
+            {
+                Instruction instruct = sendCode.Instructions[i];
+                switch (instruct.OP)
+                {
+                    case Operation.IfNe:
+                    {
+                        if (++neCount == 2)
+                        {
+                            // Remove the condition that returns from method if ArcFour instance is null.
+                            Instruction[] block = sendCode.GetBody((Jumper)instruct);
+                            sendCode.Instructions.RemoveRange(i - 3, (block.Length + 4));
+                        }
+                        break;
+                    }
+
+                    case Operation.DebugLine:
+                    {
+                        var debugLineIns = (DebugLineIns)instruct;
+                        if (debugLineIns.LineNumber == 266)
+                        {
+                            // Removes the set of instructions that utilize the ArcFour instance to encrypt the data(register #4) into register #5.
+                            sendCode.Instructions.RemoveRange(i + 1, 6);
+                        }
+                        else if (debugLineIns.LineNumber == 267)
+                        {
+                            // Removes the condition that jumps over instructions that send/write the data if register #4 is equal to register #5.
+                            // This is not needed since register #5 is null due to the previoues modification, hency will never jump, but it does clean the code up a bit.
+                            sendCode.Instructions.RemoveRange(i + 1, 3);
+                        }
+                        break;
+                    }
+
+                    case Operation.GetLocal:
+                    {
+                        var getLocalIns = (GetLocalIns)instruct;
+                        if (getLocalIns.Register == 5)
+                        {
+                            // Changes the instruction to point towards register #4 that contains the raw(non-encrypted) data.
+                            // This instruction is in charge of pushing the encrypted data in register #5 to the stack, so that the next instruction can send it.
+                            getLocalIns.Register = 4;
+                            // Notify to break out of this for loop, no more modification in this method is required.
+                            isComplete = 1;
+                        }
+                        break;
+                    }
+                }
+
+                if (isComplete == 1)
+                    break;
+            }
+
+            sendMethod.Body.Code = sendCode.ToArray();
+
+            ASMethod initCryptoMethod = habboCommunicationDemo.GetMethods(1, "void")
                 .Where(m => m.Parameters[0].IsOptional &&
                             m.Parameters[0].Type.Name == "Event")
-                .First();
+                .FirstOrDefault();
 
-            ASMethod pubVerifier = commDemo.GetMethods(1, "void")
+            if (initCryptoMethod == null)
+                return false;
+
+            ASMethod pubKeyVerifyMethod = habboCommunicationDemo.GetMethods(1, "void")
                 .Where(m => m.Body.MaxStack == 4 &&
                             m.Body.LocalCount == 10 &&
                             m.Body.InitialScopeDepth == 5 &&
                             m.Body.MaxScopeDepth == 6)
                 .FirstOrDefault();
 
-            if (connInit == null ||
-                pubVerifier == null)
-            {
+            if (pubKeyVerifyMethod == null)
                 return false;
-            }
 
-            AS3Code pubVerifierCode =
-                pubVerifier.Body.ParseCode();
+            ASCode pubVerifierCode = pubKeyVerifyMethod.Body.ParseCode();
+            Instruction[] endHandshakeInst = pubVerifierCode.Instructions
+                .Skip(pubVerifierCode.Instructions.Count - 5)
+                .Take(3)
+                .ToArray();
 
-            // Get the 13 instructions starting with: debugline 320
-            IEnumerable<Instruction> postShakeInstructions = pubVerifierCode.Instructions
-                .SkipWhile(i => i.OP != Operation.DebugLine ||
-                                ((DebugLineIns)i).LineNumber != 320)
-                .Take(13);
-
-            AS3Code connInitCode = connInit.Body.ParseCode();
-            foreach (Instruction instruction in connInitCode.Instructions)
+            ASCode connInitCode = initCryptoMethod.Body.ParseCode();
+            List<Instruction> instructions = connInitCode.Instructions;
+            for (int i = 0; i < instructions.Count; i++)
             {
-                if (JumpInstruction.IsValid(instruction.OP))
+                Instruction ins = instructions[i];
+                if (Jumper.IsValid(ins.OP))
                 {
-                    var jumper = (JumpInstruction)instruction;
+                    var jumper = (Jumper)ins;
+                    Instruction[] body = connInitCode.GetBody(jumper);
 
-                    List<Instruction> jumpScope =
-                        connInitCode.JumpScopes[jumper];
+                    Instruction removeAt = body[body.Length - 5];
+                    int removeAtIndex = instructions.IndexOf(removeAt);
 
-                    jumpScope.RemoveRange(
-                        jumpScope.Count - 6, 6);
+                    instructions.RemoveRange(removeAtIndex, 5);
+                    instructions.InsertRange(removeAtIndex, endHandshakeInst);
 
-                    jumpScope.AddRange(postShakeInstructions);
+                    connInitCode.SetEndOfJump(jumper, endHandshakeInst.Last());
+                    initCryptoMethod.Body.Code = connInitCode.ToArray();
                     break;
                 }
             }
-            connInit.Body.Code = connInitCode.ToArray();
             return true;
         }
         public bool ReplaceRSAKeys(string exponent, string modulus)
@@ -412,7 +471,7 @@ namespace HabBit.Habbo
                     default: continue;
                 }
 
-                AS3Code methodCode = method.Body.ParseCode();
+                ASCode methodCode = method.Body.ParseCode();
                 List<Instruction> instructions = methodCode.Instructions;
 
                 if (instructions.Count >= 2 &&
@@ -437,7 +496,7 @@ namespace HabBit.Habbo
             ASClass messagesClass = abc.GetClasses("HabboMessages")[0];
 
             ASMethod messagesCtor = messagesClass.Constructor;
-            AS3Code code = messagesCtor.Body.ParseCode();
+            ASCode code = messagesCtor.Body.ParseCode();
 
             int inMapTypeIndex = messagesClass.Traits[0].QNameIndex;
             int outMapTypeIndex = messagesClass.Traits[1].QNameIndex;
@@ -487,7 +546,7 @@ namespace HabBit.Habbo
                 commMngr.GetMethod(0, "void", "initComponent");
 
             string connectMethodName = string.Empty;
-            AS3Code initCompCode = initCompMethod.Body.ParseCode();
+            ASCode initCompCode = initCompMethod.Body.ParseCode();
 
             initCompCode.Instructions.Reverse(); // Start from bottom.
             foreach (Instruction instruction in initCompCode.Instructions)
@@ -502,11 +561,11 @@ namespace HabBit.Habbo
             ASMethod connectMethod = commMngr
                 .GetMethod(0, "void", connectMethodName);
 
-            AS3Code connectCode = connectMethod.Body.ParseCode();
+            ASCode connectCode = connectMethod.Body.ParseCode();
             List<Instruction> instructions = connectCode.Instructions;
             instructions.InsertRange(4, new Instruction[]
             {
-                new Instruction(Operation.GetLocal_0),
+                new GetLocal0Ins(),
                 new FindPropStrictIns(abc.Pool, getPropertyNameIndex),
                 new PushStringIns(abc.Pool, "connection.info.host"),
                 new CallPropertyIns(abc.Pool, getPropertyNameIndex, 1),
@@ -532,9 +591,12 @@ namespace HabBit.Habbo
 
             _validHostsRegexChecker = habboInstance.GetMethods(2, "Boolean")
                 .Where(m => m.Parameters[0].Type.Name == "String" &&
-                            m.Parameters[1].Type.Name == "Object").First();
+                            m.Parameters[1].Type.Name == "Object").FirstOrDefault();
 
-            AS3Code validHostCode =
+            if (_validHostsRegexChecker == null)
+                return;
+
+            ASCode validHostCode =
                 _validHostsRegexChecker.Body.ParseCode();
 
             int index = 0;
@@ -555,7 +617,7 @@ namespace HabBit.Habbo
             ASInstance messageInstance = messageClass.Instance;
             ASMethod toArrayMethod = messageInstance.GetMethods(0, "Array").First();
 
-            AS3Code toArrayCode = toArrayMethod.Body.ParseCode();
+            ASCode toArrayCode = toArrayMethod.Body.ParseCode();
             foreach (Instruction instruction in toArrayCode.Instructions)
             {
                 if (instruction.OP != Operation.PushString) continue;
