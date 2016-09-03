@@ -96,56 +96,58 @@ namespace HabBit
         public void Run()
         {
             var globalWatch = Stopwatch.StartNew();
-
-            /* Step #1 - Decompression */
-            Decompress();
-
-            /* Step #2 - Disassembling */
-            Disassemble();
-
-            /* Step #2.5 - Modification */
-            Modify();
-
-            /* Step #3 - Compression/Assembling */
-            Assemble();
-
-            if (!Options.IsDisablingHandshake || Options.IsDumpingHeaders)
+            using (Game)
             {
-                Console.WriteLine("Cleaning Up...");
-                Console.WriteLine();
+                /* Step #1 - Decompression */
+                Decompress();
 
-                if (!Options.IsDisablingHandshake)
+                /* Step #2 - Disassembling */
+                Disassemble();
+
+                /* Step #2.5 - Modification */
+                Modify();
+
+                /* Step #3 - Compression/Assembling */
+                Assemble();
+
+                if (!Options.IsDisablingHandshake || Options.IsDumpingHeaders)
                 {
-                    Console.WriteLine("    Saving RSA Keys...");
-                    using (var rsaKeyWriter = new StreamWriter(
-                        Path.Combine(Options.OutputPath, "RSAKeys.txt")))
+                    Console.WriteLine("Cleaning Up...");
+                    Console.WriteLine();
+
+                    if (!Options.IsDisablingHandshake)
                     {
-                        rsaKeyWriter.WriteLine("Exponent(e): {0}", _keys.Exponent);
-                        rsaKeyWriter.WriteLine("Modulus(n): {0}", _keys.Modulus);
-                        rsaKeyWriter.WriteLine("Private Exponent(d): {0}", _keys.PrivateExponent ?? "<Unknown>");
+                        Console.WriteLine("    Saving RSA Keys...");
+                        using (var rsaKeyWriter = new StreamWriter(
+                            Path.Combine(Options.OutputPath, "RSAKeys.txt")))
+                        {
+                            rsaKeyWriter.WriteLine("Exponent(e): {0}", _keys.Exponent);
+                            rsaKeyWriter.WriteLine("Modulus(n): {0}", _keys.Modulus);
+                            rsaKeyWriter.WriteLine("Private Exponent(d): {0}", _keys.PrivateExponent ?? "<Unknown>");
+                        }
                     }
+
+                    if (Options.IsDumpingHeaders)
+                    {
+                        Console.WriteLine("    Dumping Headers...");
+                        using (var headersWriter = new StreamWriter(
+                            Path.Combine(Options.OutputPath, "Headers.txt")))
+                        {
+                            headersWriter.WriteLine("// Outgoing Messages | {0:n0}", Game.OutMessages.Count);
+                            WriteMessages("Outgoing", Game.OutMessages, headersWriter);
+
+                            headersWriter.WriteLine();
+
+                            headersWriter.WriteLine("// Incoming Messages | {0:n0}", Game.InMessages.Count);
+                            WriteMessages("Incoming", Game.InMessages, headersWriter);
+                        }
+                    }
+                    WriteLineSplit();
                 }
 
-                if (Options.IsDumpingHeaders)
-                {
-                    Console.WriteLine("    Dumping Headers...");
-                    using (var headersWriter = new StreamWriter(
-                        Path.Combine(Options.OutputPath, "Headers.txt")))
-                    {
-                        headersWriter.WriteLine("// Outgoing Messages | {0:n0}", Game.OutMessages.Count);
-                        WriteMessages("Outgoing", Game.OutMessages, headersWriter);
-
-                        headersWriter.WriteLine();
-
-                        headersWriter.WriteLine("// Incoming Messages | {0:n0}", Game.InMessages.Count);
-                        WriteMessages("Incoming", Game.InMessages, headersWriter);
-                    }
-                }
-                WriteLineSplit();
+                globalWatch.Stop();
+                Console.WriteLine("Completion Time: {0:s\\.ff} Seconds", globalWatch.Elapsed);
             }
-
-            globalWatch.Stop();
-            Console.WriteLine("Completion Time: {0:s\\.ff} Seconds", globalWatch.Elapsed);
         }
         public void Modify()
         {
@@ -180,8 +182,7 @@ namespace HabBit
                         $"    Valid Host Pattern Changed[{i}]: \"{newPattern}\"");
                 }
             }
-
-
+            
             if (Options.IsDisablingHandshake)
             {
                 Console.Write("    Disabling Handshake...");
