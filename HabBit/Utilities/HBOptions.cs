@@ -51,9 +51,9 @@ namespace HabBit.Utilities
             HelpText = "Fixes every corrupted class/namespace/symbol name.")]
         public bool IsFixingIdentifiers { get; set; }
 
-        [Option("fixreg",
-            HelpText = "Modifieds the name of every register in a Debug instruction in every method body to a unique name.")]
-        public bool IsFixingRegisters { get; set; }
+        [Option("renreg",
+            HelpText = "Renames every Debug's instruction register name in every method body to a unique value.")]
+        public bool IsRenamingRegisters { get; set; }
 
         [OptionArray("patt",
             HelpText = "  Replaces the regex patterns found in the main Habbo class that validate where the client is being hosted from.",
