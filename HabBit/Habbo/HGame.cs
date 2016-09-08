@@ -63,6 +63,14 @@ namespace HabBit.Habbo
                 "var",
                 "get",
                 "for",
+                "case",
+                "use",
+                "default",
+                "else",
+                "implements",
+                "try",
+                "with",
+                "extends",
                 "class",
                 "false",
                 "true",
@@ -123,16 +131,18 @@ namespace HabBit.Habbo
             return (domainChecks.Count > 0 &&
                 DisableHostPrepender());
         }
-
+        
         public int FixIdentifiers()
         {
             int identifiersRenamed = 0;
-            int invalidInstanceCount = 0;
-            int invalidInterfaceCount = 0;
             // [qName][fixedName]
             var fixedNS = new SortedDictionary<string, string>();
             // [qName][namespace][fixedName]
             var fixedIN = new SortedDictionary<string, SortedDictionary<string, string>>();
+
+            int totalClasses = 0;
+            int totalInterfaces = 0;
+            int totalNamespaces = 0;
             for (int i = 0; i < 3; i++)
             {
                 ABCFile abc = GetABCFile(i);
@@ -148,27 +158,31 @@ namespace HabBit.Habbo
                     var fixedNSIndices = new Dictionary<string, int>();
                     for (int j = 1; j < pool.Namespaces.Count; j++)
                     {
+                        totalNamespaces++;
                         ASNamespace @namespace = pool.Namespaces[j];
-                        if (@namespace.Name.StartsWith("_-") ||
-                            _reservedNames.Contains(@namespace.Name.Trim()))
+
+                        if (!@namespace.Name.StartsWith("_-") &&
+                            !_reservedNames.Contains(@namespace.Name.Trim()))
                         {
-                            string fixedName = string.Empty;
-                            if (!fixedNS.TryGetValue(@namespace.Name, out fixedName))
-                            {
-                                fixedName = ("ns_" + (fixedNS.Count + 1));
-                                fixedNS.Add(@namespace.Name, fixedName);
-                            }
-
-                            int fixedNameIndex = 0;
-                            if (!fixedNSIndices.TryGetValue(fixedName, out fixedNameIndex))
-                            {
-                                fixedNameIndex = pool.AddString(fixedName);
-                                fixedNSIndices.Add(fixedName, fixedNameIndex);
-                            }
-
-                            identifiersRenamed++;
-                            @namespace.NameIndex = fixedNameIndex;
+                            continue;
                         }
+
+                        string fixedName = string.Empty;
+                        if (!fixedNS.TryGetValue(@namespace.Name, out fixedName))
+                        {
+                            fixedName = $"Namespace_{totalNamespaces:0000}";
+                            fixedNS.Add(@namespace.Name, fixedName);
+                        }
+
+                        int fixedNameIndex = 0;
+                        if (!fixedNSIndices.TryGetValue(fixedName, out fixedNameIndex))
+                        {
+                            fixedNameIndex = pool.AddString(fixedName);
+                            fixedNSIndices.Add(fixedName, fixedNameIndex);
+                        }
+
+                        identifiersRenamed++;
+                        @namespace.NameIndex = fixedNameIndex;
                     }
                     #endregion
 
@@ -179,39 +193,45 @@ namespace HabBit.Habbo
                         ASInstance instance = abc.Instances[j];
                         var qName = (QName)instance.QName.Data;
 
-                        if (qName.Name.StartsWith("_-") ||
-                            _reservedNames.Contains(qName.Name.Trim()))
+                        bool isInterface = instance.Flags.HasFlag(ClassFlags.Interface);
+                        if (isInterface)
                         {
-                            SortedDictionary<string, string> fixedNames = null;
-
-                            string fixedName = string.Empty;
-                            if (instance.Flags.HasFlag(ClassFlags.Interface))
-                            {
-                                fixedName = ("interface_" + (++invalidInterfaceCount));
-                            }
-                            else fixedName = ("class_" + (++invalidInstanceCount));
-                            
-                            if (!fixedIN.TryGetValue(qName.Name, out fixedNames))
-                            {
-                                fixedNames = new SortedDictionary<string, string>();
-                                fixedIN.Add(qName.Name, fixedNames);
-                            }
-                            fixedNames.Add(qName.Namespace.Name, fixedName);
-
-                            int fixedNameIndex = 0;
-                            if (!fixedINIndices.TryGetValue(fixedName, out fixedNameIndex))
-                            {
-                                fixedNameIndex = pool.AddString(fixedName);
-                                fixedINIndices.Add(fixedName, fixedNameIndex);
-                            }
-
-                            identifiersRenamed++;
-                            qName.NameIndex = fixedNameIndex;
+                            totalInterfaces++;
                         }
+                        else totalClasses++;
+
+                        if (!qName.Name.StartsWith("_-") &&
+                            !_reservedNames.Contains(qName.Name.Trim()))
+                        {
+                            continue;
+                        }
+
+                        string fixedName = string.Empty;
+                        if (isInterface)
+                        {
+                            fixedName = $"Interface_{totalInterfaces:0000}";
+                        }
+                        else fixedName = $"Class_{totalClasses:0000}";
+
+                        SortedDictionary<string, string> fixedNames = null;
+                        if (!fixedIN.TryGetValue(qName.Name, out fixedNames))
+                        {
+                            fixedNames = new SortedDictionary<string, string>();
+                            fixedIN.Add(qName.Name, fixedNames);
+                        }
+                        fixedNames.Add(qName.Namespace.Name, fixedName);
+
+                        int fixedNameIndex = 0;
+                        if (!fixedINIndices.TryGetValue(fixedName, out fixedNameIndex))
+                        {
+                            fixedNameIndex = pool.AddString(fixedName);
+                            fixedINIndices.Add(fixedName, fixedNameIndex);
+                        }
+
+                        identifiersRenamed++;
+                        qName.NameIndex = fixedNameIndex;
                     }
                     #endregion
-
-                    // TODO: Trait name fixing.
 
                     #region Multiname Fixing (Shared Classes/Instances, Traits(soon))
                     for (int j = 1; j < pool.Multinames.Count; j++)
@@ -270,34 +290,37 @@ namespace HabBit.Habbo
                 for (int i = 0; i < symbolTag.Names.Count; i++)
                 {
                     string name = symbolTag.Names[i];
-                    if (name.Contains("_-") || _reservedNames.Contains(name.Trim()))
+                    if (!name.Contains("_-") &&
+                        !_reservedNames.Contains(name.Trim()))
                     {
-                        string qName = name;
-                        string nsName = string.Empty;
-
-                        if (name.Contains("."))
-                        {
-                            string[] names = name.Split('.');
-                            nsName = names[0];
-                            qName = names[1];
-                        }
-
-                        name = string.Empty;
-                        if (fixedNS.ContainsKey(nsName))
-                        {
-                            nsName = fixedNS[nsName];
-                            name = (nsName + ".");
-                        }
-
-                        SortedDictionary<string, string> fixedNames = null;
-                        if (fixedIN.TryGetValue(qName, out fixedNames))
-                        {
-                            qName = fixedNames[nsName];
-                        }
-
-                        identifiersRenamed++;
-                        symbolTag.Names[i] = (name + qName);
+                        continue;
                     }
+
+                    string qName = name;
+                    string nsName = string.Empty;
+                    if (name.Contains("."))
+                    {
+                        string[] names = name.Split('.');
+                        nsName = names[0];
+                        qName = names[1];
+                    }
+
+                    name = string.Empty;
+                    if (fixedNS.ContainsKey(nsName))
+                    {
+                        nsName = fixedNS[nsName];
+                        name = (nsName + ".");
+                    }
+
+                    SortedDictionary<string, string> fixedNames = null;
+                    if (fixedIN.TryGetValue(qName, out fixedNames))
+                    {
+                        qName = fixedNames[nsName];
+                    }
+
+                    identifiersRenamed++;
+                    symbolTag.Names[i] = (name + qName);
+
                     // TODO: What if there is a symbol named: _-000.get ?
                 }
             }
@@ -323,16 +346,21 @@ namespace HabBit.Habbo
                     List<ASParameter> parameters = body.Method.Parameters;
                     for (int j = 0, paramId = 1, locId = 1; j < code.DebugInstructions.Count; j++)
                     {
+                        ASParameter parameter = null;
                         string regName = string.Empty;
                         DebugIns debugIns = code.DebugInstructions[j];
+
                         if (j < parameters.Count)
                         {
-                            regName = ("param" + paramId++);
+                            parameter = parameters[j];
+                            if (!string.IsNullOrWhiteSpace(parameter.Name))
+                            {
+                                localNameIndices[parameter.Name] = parameter.NameIndex;
+                                regName = parameter.Name;
+                            }
+                            else regName = ("param" + paramId++);
                         }
-                        else
-                        {
-                            regName = ("local" + locId++);
-                        }
+                        else regName = ("local" + locId++);
 
                         int regNameIndex = 0;
                         if (!localNameIndices.TryGetValue(regName, out regNameIndex))
@@ -340,6 +368,10 @@ namespace HabBit.Habbo
                             regNameIndex = abc.Pool.AddString(regName);
                             localNameIndices[regName] = regNameIndex;
                         }
+
+                        if (parameter != null)
+                            parameter.NameIndex = regNameIndex;
+
                         debugIns.NameIndex = regNameIndex;
                     }
 
@@ -648,6 +680,109 @@ namespace HabBit.Habbo
             }
         }
 
+        private string GetMessageStructure(ASClass messageClass, bool isOutgoing)
+        {
+            // TODO: Re-implement all those handy methods related to the message classes.
+            ASInstance msgInstance = messageClass.Instance;
+
+            string structure = string.Empty;
+            if (isOutgoing)
+            {
+                ASMethod toArrayMethod = msgInstance.GetMethods(0, "Array")
+                    .FirstOrDefault();
+
+                if (toArrayMethod != null)
+                {
+                    string[] fieldNames = null;
+                    string singleReturnField = null;
+                    ASCode code = toArrayMethod.Body.ParseCode();
+
+                    var registers = new Dictionary<int, object>();
+                    var vmStack = new Stack<Tuple<object, Instruction>>();
+                    foreach (Instruction instruct in code.Instructions)
+                    {
+                        if (instruct.OP == Operation.ReturnValue)
+                        {
+                            Tuple<object, Instruction> valuePair = vmStack.Pop();
+                            switch (valuePair.Item2.OP)
+                            {
+                                default:
+                                break;
+
+                                case Operation.GetProperty:
+                                break;
+
+                                case Operation.FindPropStrict:
+                                break;
+                            }
+                            break;
+                        }
+                        else if (instruct.OP == Operation.NewArray)
+                        {
+                            var newArrayIns = (NewArrayIns)instruct;
+                            if (newArrayIns.ArgCount == 0)
+                            {
+                                structure = "<Empty>";
+                                break;
+                            }
+
+                            fieldNames = new string[newArrayIns.ArgCount];
+                            for (int i = 0; i < fieldNames.Length; i++)
+                            {
+                                Tuple<object, Instruction> valuePair = vmStack.Pop();
+                                var multiname = (ASMultiname)valuePair.Item1;
+
+                                fieldNames[fieldNames.Length - (i + 1)] = multiname.Name;
+                            }
+                            break;
+                        }
+                        else code.Execute(registers, vmStack, instruct);
+                    }
+
+                    if (fieldNames != null)
+                    {
+                        foreach (string slotName in fieldNames)
+                        {
+                            SlotConstantTrait field = msgInstance.Traits
+                                .Where(t => t.Kind == TraitKind.Slot || t.Kind == TraitKind.Constant)
+                                .Select(t => t.Data)
+                                .Cast<SlotConstantTrait>()
+                                .SingleOrDefault(t => t.QName.Name == slotName);
+
+                            char? type = field?.Type.Name.ToLower()[0];
+                            structure += $"{{{(type ?? '?')}}}";
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(singleReturnField))
+                    {
+                        SlotConstantTrait possibleArrayField = msgInstance.Traits
+                            .Where(t => t.Kind == TraitKind.Slot || t.Kind == TraitKind.Constant)
+                            .Select(t => t.Data)
+                            .Cast<SlotConstantTrait>()
+                            .SingleOrDefault(t => t.QName.Name == singleReturnField);
+                    }
+                }
+            }
+            return structure;
+        }
+
+        protected bool TestCodeWriter()
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                ABCFile abc = GetABCFile(i);
+                foreach (ASMethodBody body in abc.MethodBodies)
+                {
+                    ASCode code = body.ParseCode();
+                    byte[] newCode = code.ToArray();
+                    if (!Enumerable.SequenceEqual(body.Code, newCode))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
         protected ABCFile GetABCFile(int index)
         {
             ABCFile abc = null;
@@ -702,8 +837,8 @@ namespace HabBit.Habbo
         public override void Disassemble()
         {
             base.Disassemble();
-            FindMessages();
 
+            FindMessages();
             FindValidHostsRegexChecker();
         }
     }
