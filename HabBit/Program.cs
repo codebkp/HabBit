@@ -265,10 +265,9 @@ namespace HabBit
             {
                 ASClass msgClass = messages[header];
                 ASInstance msgInstance = msgClass.Instance;
-                string msgName = msgInstance.QName.Name;
 
-                writer.WriteLine("{0}[{1}] = {2}",
-                    title, header, msgName);
+                string name = msgInstance.QName.Name;
+                writer.WriteLine($"{title}[{header}] = {name}");
             }
         }
 
